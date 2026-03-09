@@ -151,9 +151,6 @@ def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_sec
     store = Store(db_path)
     queue = JobQueue(store, worker_timeout_seconds, batch_size)
 
-    app = FastAPI()
-
-    @app.lifespan("startup")
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         store.open()
@@ -183,6 +180,8 @@ def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_sec
         if queue.progress_bar is not None:
             queue.progress_bar.close()
         store.close()
+
+    app = FastAPI(lifespan=lifespan)
 
     @app.post("/request_jobs")
     def request_jobs_endpoint(payload: dict = Body(default_factory=dict)):
