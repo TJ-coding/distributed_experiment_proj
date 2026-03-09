@@ -98,56 +98,37 @@ Worker(
 )
 ```
 
-### Exposing with Cloudflare Tunnel
+### Exposing with Cloudflare Quick Tunnel
 
-Expose the server via Cloudflare tunnel for remote workers without firewall configuration:
+If you want the easiest setup from a terminal, use Cloudflare Quick Tunnel. This does not require `tunnel create`, credentials JSON, or a config file.
 
-**1. Install Cloudflare Tunnel:**
+**1. Start your API server locally:**
 ```bash
-# macOS/Linux
-curl -L --output cloudflared.tgz https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.tgz
-tar -xzf cloudflared.tgz
-sudo mv cloudflared /usr/local/bin/
-
-# Or use package managers
-brew install cloudflare/cloudflare/cloudflared  # macOS
+distributed-experiment serve --jobs 10 --host 0.0.0.0 --port 8000
 ```
 
-**2. Authenticate and create tunnel:**
+**2. In another terminal, start a Quick Tunnel:**
 ```bash
-cloudflared tunnel login
-cloudflared tunnel create my-job-server
+cloudflared tunnel --url http://localhost:8000
 ```
 
-**3. Configure tunnel (create `~/.cloudflared/config.yml`):**
-```yaml
-tunnel: my-job-server
-credentials-file: /path/to/.cloudflared/<TUNNEL_ID>.json
+`cloudflared` will print a public URL like `https://random-name.trycloudflare.com`.
 
-ingress:
-  - hostname: my-job-server.example.com
-    service: http://localhost:8000
-  - service: http_status:404
-```
-
-**4. Start tunnel:**
-```bash
-cloudflared tunnel run my-job-server
-```
-
-**5. Connect workers:**
+**3. Connect workers using that URL:**
 ```python
-# Workers connect via tunnel URL (not localhost)
-with Worker(server_url="https://my-job-server.example.com") as worker:
-    while True:
-        job_id = worker.request_job()
-        if job_id is None:
-            break
-        process_job(job_id)
-        worker.submit_job(job_id)
+with Worker(server_url="https://random-name.trycloudflare.com") as worker:
+        while True:
+                job_id = worker.request_job()
+                if job_id is None:
+                        break
+                process_job(job_id)
+                worker.submit_job(job_id)
 ```
 
-See [Cloudflare Tunnel documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/#outbound-only-connections) for advanced options.
+Notes:
+- Keep the `cloudflared tunnel --url ...` process running while workers are active.
+- The Quick Tunnel URL is temporary and may change each time you restart it.
+- If `cloudflared` is missing, install it first with your package manager.
 
 ### Architecture
 
