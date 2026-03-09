@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 import threading
 import time
 
 import requests
+from tqdm import tqdm
 
 
 class Worker:
@@ -16,10 +17,14 @@ class Worker:
         machine_id: Optional[int] = None,
         heartbeat_interval_seconds: float = 5.0,
         request_timeout_seconds: float = 10.0,
+        show_progress: bool = True,
     ) -> None:
         self.base_url = server_url.rstrip("/")
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.request_timeout_seconds = request_timeout_seconds
+        self.show_progress = show_progress
+        self._progress_bar: Optional[tqdm] = None
+        self._job_buffer: list[int] = []
 
         if machine_id is None:
             machine_id = int(time.time() * 1000) % 2_000_000_000
@@ -47,9 +52,20 @@ class Worker:
         self._stop_event.set()
         self._heartbeat_thread.join(timeout=self.request_timeout_seconds)
         self._session.close()
+        if self._progress_bar is not None:
+            self._progress_bar.close()
 
     def request_job(self) -> Optional[int]:
-        """Request a job ID from the server. Returns None if no jobs available."""
+        """Request a job ID from the server. Returns None if no jobs available.
+        
+        This method fetches jobs in batches for efficiency and returns them one at a time.
+        """
+        # Return from buffer if available
+        if self._job_buffer:
+            job_id = self._job_buffer.pop(0)
+            return job_id
+        
+        # Request new batch from server
         response = self._session.post(
             f"{self.base_url}/request_jobs",
             json={"machine_id": self.machine_id},
@@ -59,18 +75,29 @@ class Worker:
         payload = response.json()
 
         job_ids = payload.get("job_ids", [])
-        if job_ids:
-            return job_ids[0]
-        return None
+        if not job_ids:
+            return None
+        
+        # Initialize progress bar on first batch
+        if self._progress_bar is None and self.show_progress:
+            self._progress_bar = tqdm(desc=f"Worker {self.machine_id}", unit="jobs")
+        
+        # Store batch and return first job
+        self._job_buffer = job_ids[1:]
+        return job_ids[0]
 
-    def submit_job(self, job_id: int, result: dict[str, Any]) -> None:
-        """Submit a completed job with its result."""
+    def submit_job(self, job_id: int) -> None:
+        """Submit a completed job ID."""
         response = self._session.post(
             f"{self.base_url}/submit_jobs",
-            json={"machine_id": self.machine_id, "job_ids": [job_id], "results": {job_id: result}},
+            json={"machine_id": self.machine_id, "job_ids": [job_id]},
             timeout=self.request_timeout_seconds,
         )
         response.raise_for_status()
+        
+        # Update progress bar
+        if self._progress_bar is not None:
+            self._progress_bar.update(1)
 
     def _heartbeat_loop(self) -> None:
         """Background heartbeat thread."""

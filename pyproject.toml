@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "distributed-experiment"
 version = "0.1.0"
-description = "A lightweight distributed job queue system with worker heartbeat monitoring"
+description = "A lightweight distributed job queue system with worker heartbeat monitoring and a Typer CLI"
 readme = "readme.md"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
     {name = "Tomoyuki", email = "tomoyuki@example.com"}
@@ -34,6 +34,8 @@ dependencies = [
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "requests>=2.31.0",
+    "tqdm>=4.65.0",
+    "typer>=0.12.0",
 ]
 
 [project.optional-dependencies]
@@ -50,11 +52,11 @@ Repository = "https://github.com/yourusername/distributed-experiment.git"
 Issues = "https://github.com/yourusername/distributed-experiment/issues"
 
 [project.scripts]
-distributed-experiment-server = "distributed_experiment.server:main"
+distributed-experiment = "distributed_experiment.cli:main"
 
 [tool.setuptools]
 packages = ["distributed_experiment"]
-package-dir = {"" = "distributed_experiment"}
+package-dir = {"" = "."}
 
 [tool.black]
 line-length = 100

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Optional, Any
 from contextlib import asynccontextmanager
 import shelve
@@ -5,6 +7,7 @@ import threading
 import time
 
 from fastapi import FastAPI, Body, HTTPException
+from tqdm import tqdm
 
 
 class Store:
@@ -44,20 +47,23 @@ class Store:
 class JobQueue:
     """Simple job queue manager."""
 
-    def __init__(self, store: Store, worker_timeout_seconds: int = 60):
+    def __init__(self, store: Store, worker_timeout_seconds: int = 60, batch_size: int = 10):
         self.store = store
         self.worker_timeout_seconds = worker_timeout_seconds
+        self.batch_size = batch_size
+        self.progress_bar: Optional[tqdm] = None
 
     def request_jobs(self, machine_id: int) -> list[int]:
-        """Request all available jobs for a worker."""
+        """Request up to batch_size available jobs for a worker."""
         self._reconcile_dead_workers()
 
         queue = self.store.get("job_queue", [])
         if not queue:
             return []
 
-        job_ids = queue[:]
-        self.store.set("job_queue", [])
+        # Take only batch_size jobs from the queue
+        job_ids = queue[:self.batch_size]
+        self.store.set("job_queue", queue[self.batch_size:])
 
         assigned = self.store.get("assigned_jobs", [])
         for job_id in job_ids:
@@ -82,6 +88,11 @@ class JobQueue:
                 kept.append(item)
 
         self.store.set("assigned_jobs", kept)
+        
+        # Update progress bar
+        if self.progress_bar is not None:
+            self.progress_bar.update(completed_count)
+        
         return completed_count
 
     def update_heartbeat(self, machine_id: Optional[int]) -> int:
@@ -128,16 +139,17 @@ class JobQueue:
         self.store.set("heartbeats", heartbeats)
 
 
-def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_seconds: int = 60) -> FastAPI:
+def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_seconds: int = 60, batch_size: int = 10) -> FastAPI:
     """Create FastAPI app with job queue.
     
     Args:
         job_ids: List of job IDs to process. On startup, completed jobs are filtered out.
         db_path: Path to persistent storage database.
         worker_timeout_seconds: Time before marking worker as dead.
+        batch_size: Maximum number of jobs to return per request.
     """
     store = Store(db_path)
-    queue = JobQueue(store, worker_timeout_seconds)
+    queue = JobQueue(store, worker_timeout_seconds, batch_size)
 
     app = FastAPI()
 
@@ -160,7 +172,16 @@ def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_sec
         if jobs_to_add:
             store.set("job_queue", list(pending_job_ids) + jobs_to_add)
         
+        # Initialize progress bar
+        total_jobs = len(job_ids)
+        completed_jobs = total_jobs - len(existing_queue) - len(assigned)
+        queue.progress_bar = tqdm(total=total_jobs, initial=completed_jobs, desc="Jobs")
+        
         yield
+        
+        # Close progress bar
+        if queue.progress_bar is not None:
+            queue.progress_bar.close()
         store.close()
 
     @app.post("/request_jobs")
@@ -187,7 +208,7 @@ def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_sec
         job_ids_list = [int(jid) for jid in job_ids_raw]
         completed = queue.submit_jobs(machine_id, job_ids_list)
 
-        return {"status": "ok", "completed": completed, "results": payload.get("results", {})}
+        return {"status": "ok", "completed": completed}
 
     @app.post("/update_heartbeat")
     def update_heartbeat(payload: dict = Body(default_factory=dict)):
