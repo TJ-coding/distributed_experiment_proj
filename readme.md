@@ -30,11 +30,12 @@ def process_job(job_id: int):
 
 with Worker() as worker:
     while True:
-        job_id = worker.request_job()
-        if job_id is None:
+        job_ids = worker.request_job()  # Returns [1, 2, 3, ...] or []
+        if not job_ids:
             break
-        process_job(job_id)
-        worker.submit_job(job_id)
+        for job_id in job_ids:
+            process_job(job_id)
+        worker.submit_jobs(job_ids)
 ```
 
 ### How It Works

@@ -24,7 +24,6 @@ class Worker:
         self.request_timeout_seconds = request_timeout_seconds
         self.show_progress = show_progress
         self._progress_bar: Optional[tqdm] = None
-        self._job_buffer: list[int] = []
 
         if machine_id is None:
             machine_id = int(time.time() * 1000) % 2_000_000_000
@@ -55,17 +54,11 @@ class Worker:
         if self._progress_bar is not None:
             self._progress_bar.close()
 
-    def request_job(self) -> Optional[int]:
-        """Request a job ID from the server. Returns None if no jobs available.
+    def request_job(self) -> list[int]:
+        """Request a batch of job IDs from the server. Returns empty list if no jobs available.
         
-        This method fetches jobs in batches for efficiency and returns them one at a time.
+        Returns a list of job IDs (e.g., [1, 2, 3, 4, 5]). The batch size is configured on the server.
         """
-        # Return from buffer if available
-        if self._job_buffer:
-            job_id = self._job_buffer.pop(0)
-            return job_id
-        
-        # Request new batch from server
         response = self._session.post(
             f"{self.base_url}/request_jobs",
             json={"machine_id": self.machine_id},
@@ -75,29 +68,29 @@ class Worker:
         payload = response.json()
 
         job_ids = payload.get("job_ids", [])
-        if not job_ids:
-            return None
         
         # Initialize progress bar on first batch
-        if self._progress_bar is None and self.show_progress:
+        if job_ids and self._progress_bar is None and self.show_progress:
             self._progress_bar = tqdm(desc=f"Worker {self.machine_id}", unit="jobs")
         
-        # Store batch and return first job
-        self._job_buffer = job_ids[1:]
-        return job_ids[0]
+        return job_ids
 
     def submit_job(self, job_id: int) -> None:
-        """Submit a completed job ID."""
+        """Submit a single completed job ID."""
+        self.submit_jobs([job_id])
+
+    def submit_jobs(self, job_ids: list[int]) -> None:
+        """Submit multiple completed job IDs."""
         response = self._session.post(
             f"{self.base_url}/submit_jobs",
-            json={"machine_id": self.machine_id, "job_ids": [job_id]},
+            json={"machine_id": self.machine_id, "job_ids": job_ids},
             timeout=self.request_timeout_seconds,
         )
         response.raise_for_status()
         
         # Update progress bar
         if self._progress_bar is not None:
-            self._progress_bar.update(1)
+            self._progress_bar.update(len(job_ids))
 
     def _heartbeat_loop(self) -> None:
         """Background heartbeat thread."""

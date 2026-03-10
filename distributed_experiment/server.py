@@ -89,6 +89,11 @@ class JobQueue:
 
         self.store.set("assigned_jobs", kept)
         
+        # Track completed jobs
+        completed = self.store.get("completed_jobs", set())
+        completed.update(job_ids)
+        self.store.set("completed_jobs", completed)
+        
         # Update progress bar
         if self.progress_bar is not None:
             self.progress_bar.update(completed_count)
@@ -155,24 +160,21 @@ def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_sec
     async def lifespan(app: FastAPI):
         store.open()
         
-        # Initialize job queue on first run or reload
-        existing_queue = store.get("job_queue", [])
-        assigned = store.get("assigned_jobs", [])
+        # Get completed jobs
+        completed = store.get("completed_jobs", set())
         
-        # Get all job IDs that are still pending or assigned
-        pending_job_ids = set(existing_queue)
-        for item in assigned:
-            pending_job_ids.add(item["job_id"])
+        # Clear assigned jobs on restart (workers may be dead)
+        store.set("assigned_jobs", [])
+        store.set("heartbeats", {})
         
-        # Add only jobs that aren't already pending
-        jobs_to_add = [jid for jid in job_ids if jid not in pending_job_ids]
-        if jobs_to_add:
-            store.set("job_queue", list(pending_job_ids) + jobs_to_add)
+        # Reinitialize queue: all jobs minus completed only
+        pending_jobs = [jid for jid in job_ids if jid not in completed]
+        store.set("job_queue", pending_jobs)
         
-        # Initialize progress bar
+        # Calculate progress
         total_jobs = len(job_ids)
-        completed_jobs = total_jobs - len(existing_queue) - len(assigned)
-        queue.progress_bar = tqdm(total=total_jobs, initial=completed_jobs, desc="Jobs")
+        completed_count = len(completed)
+        queue.progress_bar = tqdm(total=total_jobs, initial=completed_count, desc="Jobs")
         
         yield
         
