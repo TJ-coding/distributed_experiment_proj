@@ -89,10 +89,10 @@ class JobQueue:
 
         self.store.set("assigned_jobs", kept)
         
-        # Track completed jobs
-        completed = self.store.get("completed_jobs", set())
+        # Track completed jobs (use list for shelve compatibility)
+        completed = set(self.store.get("completed_jobs", []))
         completed.update(job_ids)
-        self.store.set("completed_jobs", completed)
+        self.store.set("completed_jobs", list(completed))
         
         # Update progress bar
         if self.progress_bar is not None:
@@ -160,8 +160,8 @@ def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_sec
     async def lifespan(app: FastAPI):
         store.open()
         
-        # Get completed jobs
-        completed = store.get("completed_jobs", set())
+        # Get completed jobs (stored as list, convert to set for fast lookup)
+        completed = set(store.get("completed_jobs", []))
         
         # Clear assigned jobs on restart (workers may be dead)
         store.set("assigned_jobs", [])

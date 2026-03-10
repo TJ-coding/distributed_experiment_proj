@@ -6,7 +6,7 @@ A lightweight distributed job queue system with worker heartbeat monitoring.
 
 **CLI (Typer):**
 ```bash
-distributed-experiment serve --jobs 10
+distributed-experiment --jobs 100 --batch-size 10
 ```
 
 **Server:**
