@@ -118,12 +118,13 @@ cloudflared tunnel --url http://localhost:8000
 **3. Connect workers using that URL:**
 ```python
 with Worker(server_url="https://random-name.trycloudflare.com") as worker:
-        while True:
-                job_id = worker.request_job()
-                if job_id is None:
-                        break
-                process_job(job_id)
-                worker.submit_job(job_id)
+    while True:
+        job_ids = worker.request_job()
+        if not job_ids:
+            break
+        for job_id in job_ids:
+            process_job(job_id)
+        worker.submit_jobs(job_ids)
 ```
 
 Notes:

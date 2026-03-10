@@ -68,6 +68,16 @@ class Worker:
         payload = response.json()
 
         job_ids = payload.get("job_ids", [])
+        if not isinstance(job_ids, list):
+            raise RuntimeError(
+                "Invalid /request_jobs response: expected 'job_ids' as list[int]. "
+                "Hint: server may be using a legacy response format."
+            )
+        if any(not isinstance(jid, int) or isinstance(jid, bool) for jid in job_ids):
+            raise RuntimeError(
+                "Invalid /request_jobs response: 'job_ids' must contain integers only. "
+                "Hint: server may be using a legacy response format."
+            )
         
         # Initialize progress bar on first batch
         if job_ids and self._progress_bar is None and self.show_progress:

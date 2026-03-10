@@ -205,8 +205,36 @@ def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_sec
         if machine_id_raw is None or not isinstance(job_ids_raw, list):
             raise HTTPException(status_code=400, detail="machine_id and job_ids list are required")
 
-        machine_id = int(machine_id_raw)
-        job_ids_list = [int(jid) for jid in job_ids_raw]
+        if not isinstance(machine_id_raw, int) or isinstance(machine_id_raw, bool):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "machine_id must be an integer. "
+                    "Hint: this request likely came from a legacy worker/client payload."
+                ),
+            )
+
+        if any(isinstance(jid, list) for jid in job_ids_raw):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "job_ids must be a flat list of integers (e.g. [1, 2, 3], not [[1, 2, 3]]). "
+                    "Hint: worker/client looks legacy (double-wrapping job_ids before submit)."
+                ),
+            )
+
+        if any(not isinstance(jid, int) or isinstance(jid, bool) for jid in job_ids_raw):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "job_ids must contain integers only. "
+                    "Hint: request format may be from a legacy worker/client."
+                ),
+            )
+
+        machine_id = machine_id_raw
+        job_ids_list = job_ids_raw
+
         completed = queue.submit_jobs(machine_id, job_ids_list)
 
         return {"status": "ok", "completed": completed}
