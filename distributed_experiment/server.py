@@ -7,7 +7,24 @@ import threading
 import time
 
 from fastapi import FastAPI, Body, HTTPException
+from fastapi.responses import HTMLResponse
 from tqdm import tqdm
+
+
+def format_duration(seconds: float | None) -> str | None:
+    """Format a duration in seconds as a compact human-readable string."""
+    if seconds is None:
+        return None
+
+    total_seconds = max(0, int(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    if hours > 0:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes > 0:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
 
 
 class Store:
@@ -52,6 +69,8 @@ class JobQueue:
         self.worker_timeout_seconds = worker_timeout_seconds
         self.batch_size = batch_size
         self.progress_bar: Optional[tqdm] = None
+        self.run_started_at: Optional[float] = None
+        self.run_started_completed_jobs = 0
 
     def request_jobs(self, machine_id: int) -> list[int]:
         """Request up to batch_size available jobs for a worker."""
@@ -143,6 +162,45 @@ class JobQueue:
             heartbeats.pop(str(mid), None)
         self.store.set("heartbeats", heartbeats)
 
+    def get_status(self, total_jobs: int) -> dict[str, int | float | str | None]:
+        """Return current queue status for display/monitoring."""
+        self._reconcile_dead_workers()
+
+        completed_jobs = len(set(self.store.get("completed_jobs", [])))
+        live_workers = len(self.store.get("heartbeats", {}))
+        percent_completed = 0.0
+        if total_jobs > 0:
+            percent_completed = completed_jobs / total_jobs * 100
+
+        elapsed_seconds = None
+        elapsed_display = None
+        eta_seconds = None
+        eta_display = None
+        if self.run_started_at is not None:
+            elapsed_seconds = time.time() - self.run_started_at
+            elapsed_display = format_duration(elapsed_seconds)
+
+            completed_this_run = completed_jobs - self.run_started_completed_jobs
+            remaining_jobs = max(0, total_jobs - completed_jobs)
+            if completed_this_run > 0 and elapsed_seconds > 0 and remaining_jobs > 0:
+                jobs_per_second = completed_this_run / elapsed_seconds
+                eta_seconds = remaining_jobs / jobs_per_second
+                eta_display = format_duration(eta_seconds)
+            elif remaining_jobs == 0:
+                eta_seconds = 0.0
+                eta_display = format_duration(eta_seconds)
+
+        return {
+            "completed_jobs": completed_jobs,
+            "total_jobs": total_jobs,
+            "percent_completed": percent_completed,
+            "live_workers": live_workers,
+            "elapsed_seconds": elapsed_seconds,
+            "elapsed_display": elapsed_display,
+            "eta_seconds": eta_seconds,
+            "eta_display": eta_display,
+        }
+
 
 def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_seconds: int = 60, batch_size: int = 10) -> FastAPI:
     """Create FastAPI app with job queue.
@@ -174,6 +232,8 @@ def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_sec
         # Calculate progress
         total_jobs = len(job_ids)
         completed_count = len(completed)
+        queue.run_started_at = time.time()
+        queue.run_started_completed_jobs = completed_count
         queue.progress_bar = tqdm(total=total_jobs, initial=completed_count, desc="Jobs")
         
         yield
@@ -244,6 +304,170 @@ def create_app(job_ids: list[int], db_path: str = "store.db", worker_timeout_sec
         machine_id = payload.get("machine_id")
         assigned_machine_id = queue.update_heartbeat(machine_id)
         return {"status": "ok", "machine_id": assigned_machine_id}
+
+    @app.get("/status")
+    def status():
+        status = queue.get_status(len(job_ids))
+        completed_jobs = status["completed_jobs"]
+        total_jobs = status["total_jobs"]
+        percent_completed = status["percent_completed"]
+        live_workers = status["live_workers"]
+        elapsed_display = status["elapsed_display"]
+        eta_display = status["eta_display"]
+        return {
+            "message": (
+                f"Jobs Completed / Total Jobs: {completed_jobs}/{total_jobs}. "
+                f"% Completed: {percent_completed:.1f}%. "
+                f"Live Workers Connected: {live_workers}. "
+                f"Time Elapsed: {elapsed_display or 'n/a'}. "
+                f"ETA: {eta_display or 'n/a'}"
+            ),
+            "completed_jobs": completed_jobs,
+            "total_jobs": total_jobs,
+            "percent_completed": percent_completed,
+            "live_workers": live_workers,
+            "elapsed_seconds": status["elapsed_seconds"],
+            "elapsed_display": elapsed_display,
+            "eta_seconds": status["eta_seconds"],
+            "eta_display": eta_display,
+        }
+
+    @app.get("/", response_class=HTMLResponse)
+    def root_status():
+        status = queue.get_status(len(job_ids))
+        completed_jobs = status["completed_jobs"]
+        total_jobs = status["total_jobs"]
+        percent_completed = status["percent_completed"]
+        live_workers = status["live_workers"]
+        elapsed_display = status["elapsed_display"] or "n/a"
+        eta_display = status["eta_display"] or "n/a"
+
+        progress_width = min(100.0, max(0.0, float(percent_completed)))
+
+        return f"""
+<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+    <meta charset=\"utf-8\">
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+    <meta http-equiv=\"refresh\" content=\"5\">
+    <title>Distributed Experiment Status</title>
+    <style>
+        :root {{
+            color-scheme: light;
+            --bg: #f4efe6;
+            --panel: #fffdf8;
+            --ink: #1f2328;
+            --muted: #5b6470;
+            --accent: #0b6e4f;
+            --accent-soft: #d8efe7;
+            --border: #d7d0c4;
+        }}
+        * {{ box-sizing: border-box; }}
+        body {{
+            margin: 0;
+            font-family: Georgia, "Times New Roman", serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at top left, #fff8e8 0, transparent 35%),
+                linear-gradient(180deg, #efe7da 0%, var(--bg) 100%);
+            min-height: 100vh;
+        }}
+        .wrap {{
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 40px 20px 56px;
+        }}
+        .panel {{
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 28px;
+            box-shadow: 0 14px 40px rgba(48, 41, 30, 0.08);
+        }}
+        h1 {{
+            margin: 0 0 8px;
+            font-size: 2rem;
+            line-height: 1.1;
+        }}
+        p {{
+            margin: 0;
+            color: var(--muted);
+            font-size: 1rem;
+        }}
+        .progress {{
+            margin: 24px 0 28px;
+            width: 100%;
+            height: 18px;
+            background: #ece4d7;
+            border-radius: 999px;
+            overflow: hidden;
+            border: 1px solid #ddd2c2;
+        }}
+        .progress-bar {{
+            height: 100%;
+            width: {progress_width:.1f}%;
+            background: linear-gradient(90deg, #1f8f68 0%, var(--accent) 100%);
+            transition: width 0.3s ease;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            overflow: hidden;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }}
+        th, td {{
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
+            text-align: left;
+            font-size: 1rem;
+        }}
+        th {{
+            width: 40%;
+            background: #f7f1e8;
+            font-weight: 700;
+        }}
+        tr:last-child th,
+        tr:last-child td {{
+            border-bottom: none;
+        }}
+        .pill {{
+            display: inline-block;
+            margin-top: 16px;
+            padding: 8px 12px;
+            background: var(--accent-soft);
+            color: var(--accent);
+            border-radius: 999px;
+            font: 600 0.9rem/1.2 Arial, sans-serif;
+        }}
+        code {{
+            font-family: "SFMono-Regular", Consolas, monospace;
+            font-size: 0.9rem;
+        }}
+    </style>
+</head>
+<body>
+    <main class=\"wrap\">
+        <section class=\"panel\">
+            <h1>Distributed Experiment Status</h1>
+            <p>Auto-refreshes every 5 seconds. Machine-readable status is available at <code>/status</code>.</p>
+            <div class=\"progress\" aria-label=\"Progress\">
+                <div class=\"progress-bar\"></div>
+            </div>
+            <table>
+                <tr><th>Jobs Completed / Total Jobs</th><td>{completed_jobs}/{total_jobs}</td></tr>
+                <tr><th>Percent Completed</th><td>{percent_completed:.1f}%</td></tr>
+                <tr><th>Live Workers Connected</th><td>{live_workers}</td></tr>
+                <tr><th>Time Elapsed</th><td>{elapsed_display}</td></tr>
+                <tr><th>ETA</th><td>{eta_display}</td></tr>
+            </table>
+            <div class=\"pill\">Batch size: {queue.batch_size}</div>
+        </section>
+    </main>
+</body>
+</html>
+"""
 
     return app
 

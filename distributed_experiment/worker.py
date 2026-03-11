@@ -85,12 +85,13 @@ class Worker:
         
         return job_ids
 
-    def submit_job(self, job_id: int) -> None:
-        """Submit a single completed job ID."""
-        self.submit_jobs([job_id])
-
     def submit_jobs(self, job_ids: list[int]) -> None:
         """Submit multiple completed job IDs."""
+        if not isinstance(job_ids, list):
+            raise TypeError("submit_jobs expects list[int]")
+        if any(not isinstance(jid, int) or isinstance(jid, bool) for jid in job_ids):
+            raise TypeError("submit_jobs expects list[int] with integer job IDs only")
+
         response = self._session.post(
             f"{self.base_url}/submit_jobs",
             json={"machine_id": self.machine_id, "job_ids": job_ids},
